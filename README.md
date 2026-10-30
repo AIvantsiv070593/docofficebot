@@ -96,3 +96,4 @@ pytest -q
 - [docs/email-examples/](docs/email-examples/)
 - [docs/registry-and-storage.md](docs/registry-and-storage.md)
 - Публичные страницы (GitHub Pages): [homepage](https://aivantsiv070593.github.io/docofficebot/) · [privacy](https://aivantsiv070593.github.io/docofficebot/privacy.html) — см. [docs/GOOGLE-SITE.md](docs/GOOGLE-SITE.md)
+- [Privacy policy (link for Google)](PRIVACY.md) · License: [MIT](LICENSE)
