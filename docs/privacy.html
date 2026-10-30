@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Политика конфиденциальности — DocOfficeBot</title>
+  <style>
+    :root {
+      --bg: #f7f4ef;
+      --ink: #1c1917;
+      --muted: #57534e;
+      --line: #d6d3d1;
+      --accent: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.55;
+    }
+    main {
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    h1 { font-size: 1.75rem; margin: 0 0 0.5rem; }
+    h2 { font-size: 1.1rem; margin: 1.75rem 0 0.5rem; }
+    p, li { color: var(--muted); }
+    a { color: var(--accent); }
+    .meta { font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="meta"><a href="index.html">← DocOfficeBot</a></p>
+    <h1>Политика конфиденциальности</h1>
+    <p class="meta">Дата обновления: 30 октября 2026</p>
+
+    <h2>Кто оператор</h2>
+    <p>
+      DocOfficeBot — внутренний сервис организации (Telegram-бот + интеграция
+      с Gmail и Google Sheets) для обработки скан-копий накладных сотрудников офиса.
+    </p>
+
+    <h2>Какие данные обрабатываются</h2>
+    <ul>
+      <li>Сообщения и вложения из разрешённого Telegram-чата (фото/документы накладных, подписи).</li>
+      <li>Идентификаторы чата и сообщений Telegram, необходимые для статусов и антидублей.</li>
+      <li>Тема и служебные поля исходящих писем в DocsInBox; ответы почты DocsInBox.</li>
+      <li>Строки реестра заявок в Google Sheets (контрагент, номер, статусы, ссылки).</li>
+      <li>Технические логи и служебные уведомления администратору бота.</li>
+    </ul>
+
+    <h2>Зачем</h2>
+    <p>
+      Передача накладных в DocsInBox, учёт статусов обработки и оповещение
+      ответственных сотрудников. Данные не продаются и не передаются третьим лицам
+      вне сервисов, указанных выше (Telegram, Google, DocsInBox).
+    </p>
+
+    <h2>Где хранятся</h2>
+    <p>
+      На сервере организации (SQLite и файлы вложений), в Google Sheets / Gmail
+      аккаунта организации и в Telegram. Доступ ограничен учётными данными
+      организации и администратором бота.
+    </p>
+
+    <h2>Срок хранения</h2>
+    <p>
+      Заявки и вложения хранятся до завершения обработки / очистки администратором.
+      Почтовые и табличные данные подчиняются политике организации и настройкам Google.
+    </p>
+
+    <h2>Google API</h2>
+    <p>
+      Приложение запрашивает доступ к Gmail и Google Sheets только для аккаунта
+      организации, чтобы отправлять письма с вложениями и обновлять реестр.
+      Использование данных соответствует политике Google API Services User Data Policy,
+      включая требования Limited Use.
+    </p>
+
+    <h2>Контакты</h2>
+    <p>
+      Вопросы по обработке данных: через администратора бота в Telegram
+      или канал <a href="https://t.me/officesakh/">t.me/officesakh</a>.
+    </p>
+  </main>
+</body>
+</html>

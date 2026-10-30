@@ -1,0 +1,15 @@
+.env
+data/*
+!data/.gitkeep
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+dist/
+*.egg-info/
+.mypy_cache/
+.cursor/
+.ruff_cache/
+*.tar.gz
+AgentStores/

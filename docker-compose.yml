@@ -1,0 +1,21 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    deploy:
+      replicas: 1
+
+  backup:
+    image: busybox:1.36
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+      - ./scripts/backup.sh:/backup.sh:ro
+    # sh … — не нужен +x на смонтированном скрипте (часто теряется после tar с Windows)
+    entrypoint: ["/bin/sh", "-c", "while true; do /bin/sh /backup.sh; sleep 86400; done"]
+    depends_on:
+      - bot
