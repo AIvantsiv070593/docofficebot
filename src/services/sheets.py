@@ -5,6 +5,7 @@ import logging
 
 from src.config import Settings
 from src.db.models import Claim
+from src.services.exceptions_service import normalize_counterparty
 from src.services.gmail_auth import GmailAuth, GmailAuthError
 from src.timezone_util import format_local
 
@@ -20,6 +21,8 @@ REGISTRY_HEADERS = [
     "Ссылка",
     "Ошибка",
 ]
+
+_EXCEPTION_HEADERS = frozenset({"исключения", "контрагент", "название"})
 
 
 class SheetsRegistry:
@@ -46,6 +49,83 @@ class SheetsRegistry:
     def list_exceptions(self) -> list[str]:
         if not self.enabled:
             return []
+        items: list[str] = []
+        for value in self._exception_column_values():
+            if value and value.casefold() not in _EXCEPTION_HEADERS:
+                items.append(value)
+        return items
+
+    def add_exception(self, name: str) -> bool:
+        """Append exception. Returns False if already present."""
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("empty exception name")
+        if not self.enabled:
+            raise GmailAuthError("Sheets unavailable")
+        needle = normalize_counterparty(name)
+        if any(normalize_counterparty(x) == needle for x in self.list_exceptions()):
+            return False
+        tab = self._settings.sheets_exceptions_tab
+        self._values().append(
+            spreadsheetId=self._settings.spreadsheet_id,
+            range=f"{tab}!A:A",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [[name]]},
+        ).execute()
+        return True
+
+    def remove_exception(self, query: str) -> str | None:
+        """Remove by 1-based index or exact name (casefold). Returns removed text."""
+        query = (query or "").strip()
+        if not query:
+            return None
+        if not self.enabled:
+            raise GmailAuthError("Sheets unavailable")
+
+        items = self.list_exceptions()
+        target: str | None = None
+        if query.isdigit():
+            idx = int(query)
+            if 1 <= idx <= len(items):
+                target = items[idx - 1]
+        else:
+            needle = normalize_counterparty(query)
+            for item in items:
+                if normalize_counterparty(item) == needle:
+                    target = item
+                    break
+        if target is None:
+            return None
+
+        needle = normalize_counterparty(target)
+        raw = self._exception_column_values()
+        kept: list[list[str]] = []
+        removed = False
+        for value in raw:
+            if (
+                not removed
+                and value
+                and value.casefold() not in _EXCEPTION_HEADERS
+                and normalize_counterparty(value) == needle
+            ):
+                removed = True
+                continue
+            kept.append([value])
+
+        tab = self._settings.sheets_exceptions_tab
+        sid = self._settings.spreadsheet_id
+        self._values().clear(spreadsheetId=sid, range=f"{tab}!A:A").execute()
+        if kept:
+            self._values().update(
+                spreadsheetId=sid,
+                range=f"{tab}!A1",
+                valueInputOption="RAW",
+                body={"values": kept},
+            ).execute()
+        return target if removed else None
+
+    def _exception_column_values(self) -> list[str]:
         result = (
             self._values()
             .get(
@@ -54,15 +134,13 @@ class SheetsRegistry:
             )
             .execute()
         )
-        rows = result.get("values", [])
-        items: list[str] = []
-        for row in rows:
+        values: list[str] = []
+        for row in result.get("values", []):
             if not row:
+                values.append("")
                 continue
-            value = str(row[0]).strip()
-            if value and value.casefold() not in {"исключения", "контрагент", "название"}:
-                items.append(value)
-        return items
+            values.append(str(row[0]).strip())
+        return values
 
     def clear_registry(self) -> None:
         """Wipe registry tab data and restore header row."""

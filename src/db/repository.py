@@ -43,6 +43,18 @@ async def get_claim_by_id(session: AsyncSession, claim_id: int) -> Claim | None:
     return await session.get(Claim, claim_id)
 
 
+async def find_by_dedupe(
+    session: AsyncSession, chat_id: int, dedupe_key: str
+) -> Claim | None:
+    result = await session.execute(
+        select(Claim).where(
+            Claim.chat_id == chat_id,
+            Claim.dedupe_key == dedupe_key,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def find_active_by_dedupe(
     session: AsyncSession, chat_id: int, dedupe_key: str
 ) -> Claim | None:
@@ -91,6 +103,40 @@ async def find_by_thread_id(
     return list(result.scalars().all())
 
 
+async def list_error_claims(session: AsyncSession) -> list[Claim]:
+    result = await session.execute(
+        select(Claim)
+        .where(Claim.status == ClaimStatus.ERROR.value)
+        .order_by(Claim.id.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def delete_error_claims(session: AsyncSession) -> list[int]:
+    claims = await list_error_claims(session)
+    ids = [c.id for c in claims]
+    for claim in claims:
+        await session.delete(claim)
+    await session.flush()
+    return ids
+
+
+async def find_error_by_outgoing_subject(
+    session: AsyncSession, chat_id: int, outgoing_subject: str
+) -> Claim | None:
+    """Latest ERROR claim with the same mail subject (same invoice text)."""
+    result = await session.execute(
+        select(Claim)
+        .where(
+            Claim.chat_id == chat_id,
+            Claim.outgoing_subject == outgoing_subject,
+            Claim.status == ClaimStatus.ERROR.value,
+        )
+        .order_by(Claim.id.desc())
+    )
+    return result.scalars().first()
+
+
 async def list_sent_without_appeal(session: AsyncSession) -> list[Claim]:
     result = await session.execute(
         select(Claim)
@@ -104,9 +150,27 @@ async def list_sent_without_appeal(session: AsyncSession) -> list[Claim]:
 
 
 async def list_not_entered(session: AsyncSession) -> list[Claim]:
+    """Claims still in progress / failed — not closed finals."""
     result = await session.execute(
         select(Claim)
-        .where(Claim.status != ClaimStatus.ENTERED.value)
+        .where(
+            Claim.status.notin_(
+                [
+                    ClaimStatus.ENTERED.value,
+                    ClaimStatus.EXCEPTION.value,
+                    ClaimStatus.ALCOHOL.value,
+                ]
+            )
+        )
+        .order_by(Claim.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def list_exception_claims(session: AsyncSession) -> list[Claim]:
+    result = await session.execute(
+        select(Claim)
+        .where(Claim.status == ClaimStatus.EXCEPTION.value)
         .order_by(Claim.created_at.asc())
     )
     return list(result.scalars().all())

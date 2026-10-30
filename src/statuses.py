@@ -9,6 +9,7 @@ class ClaimStatus(str, Enum):
     SENT = "Письмо отправлено"
     RECEIVED = "Получено системой"
     ENTERED = "Внесено"
+    ALCOHOL = "Алкоголь"
     NO_REPLY = "Нет ответа"
     ERROR = "Ошибка"
 
@@ -20,6 +21,7 @@ STATUS_REACTION: dict[ClaimStatus, str] = {
     ClaimStatus.SENT: "⚡",
     ClaimStatus.RECEIVED: "🤝",
     ClaimStatus.ENTERED: "👍",
+    ClaimStatus.ALCOHOL: "🍺",
     ClaimStatus.NO_REPLY: "😐",
     ClaimStatus.ERROR: "👎",
 }
@@ -36,6 +38,7 @@ FINAL_STATUSES = frozenset(
     {
         ClaimStatus.EXCEPTION,
         ClaimStatus.ENTERED,
+        ClaimStatus.ALCOHOL,
         ClaimStatus.NO_REPLY,
         ClaimStatus.ERROR,
     }

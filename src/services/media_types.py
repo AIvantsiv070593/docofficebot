@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".heic", ".heif"})
+ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".heic", ".heif", ".pdf"})
 ALLOWED_MIME_PREFIXES = (
     "image/jpeg",
     "image/png",
     "image/heic",
     "image/heif",
+    "application/pdf",
 )
 
 
@@ -34,6 +35,8 @@ def guess_extension(file_name: str, mime_type: str | None) -> str:
         if name.endswith(ext):
             return ext
     mime = (mime_type or "").casefold()
+    if mime.startswith("application/pdf"):
+        return ".pdf"
     if mime.startswith("image/png"):
         return ".png"
     if mime.startswith("image/heic") or mime.startswith("image/heif"):

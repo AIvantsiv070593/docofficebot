@@ -8,15 +8,22 @@ from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from src.bot.admin_text import ADMIN_HELP, format_pending_summary
+from src.bot.admin_text import (
+    ADMIN_HELP,
+    format_exceptions_list,
+    format_excluded_summary,
+    format_pending_summary,
+)
 from src.bot.album import AlbumAggregator, AlbumBatch, extract_media
 from src.config import Settings
 from src.db import repository as repo
 from src.db.session import session_scope
 from src.services.caption import has_send_command
 from src.services.claim_pipeline import ClaimPipeline
-from src.services.gmail_auth import GmailAuth
+from src.services.exceptions_service import ExceptionsCache
+from src.services.gmail_auth import GmailAuth, GmailAuthError
 from src.services.jobs import BackgroundJobs
+from src.services.sheets import SheetsRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +36,8 @@ def build_router(
     pipeline: ClaimPipeline,
     gmail_auth: GmailAuth,
     jobs: BackgroundJobs,
+    sheets: SheetsRegistry,
+    exceptions_cache: ExceptionsCache,
 ) -> Router:
     router = Router()
     aggregator = AlbumAggregator(
@@ -132,6 +141,120 @@ def build_router(
             )
         )
 
+    @router.message(Command("excluded"), F.chat.type == ChatType.PRIVATE)
+    async def on_excluded(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        async with session_scope() as session:
+            claims = await repo.list_exception_claims(session)
+        await message.answer(format_excluded_summary(claims, settings.timezone))
+
+    @router.message(Command("alcohol"), F.chat.type == ChatType.PRIVATE)
+    async def on_alcohol(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        args = (message.text or "").split(maxsplit=1)
+        if len(args) < 2 or not args[1].strip().isdigit():
+            await message.answer(
+                "🍺 Пример: /alcohol 12\n"
+                "Закрыть заявку как алкоголь (ЕГАИС). Id — в /pending"
+            )
+            return
+        claim_id = int(args[1].strip())
+        detail = await jobs.mark_alcohol(claim_id)
+        await message.answer(detail)
+
+    @router.message(Command("retry"), F.chat.type == ChatType.PRIVATE)
+    async def on_retry(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        args = (message.text or "").split(maxsplit=1)
+        if len(args) < 2 or not args[1].strip().isdigit():
+            await message.answer(
+                "🔁 Пример: /retry 12\n"
+                "Все ошибки с файлами: /retry_errors\n"
+                "Номера смотри в /pending"
+            )
+            return
+        claim_id = int(args[1].strip())
+        await message.answer(f"⏳ Retry #{claim_id}…")
+        detail = await jobs.retry_error_claim(claim_id)
+        await message.answer(detail)
+
+    @router.message(Command("retry_errors"), F.chat.type == ChatType.PRIVATE)
+    async def on_retry_errors(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        await message.answer("⏳ Retry всех ошибок…")
+        detail = await jobs.retry_all_errors()
+        # Telegram message limit
+        if len(detail) > 4000:
+            detail = detail[:3900] + "\n…(обрезано)"
+        await message.answer(detail)
+
+    @router.message(Command("exceptions"), F.chat.type == ChatType.PRIVATE)
+    async def on_exceptions(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        try:
+            items = await asyncio.to_thread(sheets.list_exceptions)
+        except GmailAuthError as exc:
+            await message.answer(f"❌ Sheets: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001
+            await message.answer(f"❌ Не удалось прочитать исключения: {exc}")
+            return
+        exceptions_cache.set(items)
+        await message.answer(format_exceptions_list(items))
+
+    @router.message(Command("exception_add"), F.chat.type == ChatType.PRIVATE)
+    async def on_exception_add(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        args = (message.text or "").split(maxsplit=1)
+        if len(args) < 2 or not args[1].strip():
+            await message.answer("➕ Пример: /exception_add ООО Ромашка")
+            return
+        name = args[1].strip()
+        try:
+            added = await asyncio.to_thread(sheets.add_exception, name)
+        except GmailAuthError as exc:
+            await message.answer(f"❌ Sheets: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001
+            await message.answer(f"❌ Не удалось добавить: {exc}")
+            return
+        exceptions_cache.invalidate()
+        if added:
+            await message.answer(f"✅ Добавлено в исключения: {name}")
+        else:
+            await message.answer(f"ℹ️ Уже в списке: {name}")
+
+    @router.message(Command("exception_del"), F.chat.type == ChatType.PRIVATE)
+    async def on_exception_del(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        args = (message.text or "").split(maxsplit=1)
+        if len(args) < 2 or not args[1].strip():
+            await message.answer(
+                "➖ Пример: /exception_del 2\nили /exception_del ООО Ромашка"
+            )
+            return
+        query = args[1].strip()
+        try:
+            removed = await asyncio.to_thread(sheets.remove_exception, query)
+        except GmailAuthError as exc:
+            await message.answer(f"❌ Sheets: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001
+            await message.answer(f"❌ Не удалось удалить: {exc}")
+            return
+        exceptions_cache.invalidate()
+        if removed:
+            await message.answer(f"✅ Удалено из исключений: {removed}")
+        else:
+            await message.answer(f"ℹ️ Не найдено: {query}")
+
     @router.message(Command("check_gmail"), F.chat.type == ChatType.PRIVATE)
     async def on_check_gmail(message: Message) -> None:
         if not _is_admin(message):
@@ -157,6 +280,26 @@ def build_router(
             detail = await jobs.resync_sheets()
         except Exception as exc:  # noqa: BLE001
             await message.answer(f"❌ Ошибка resync: {exc}")
+            return
+        await message.answer(detail)
+
+    @router.message(Command("purge_errors"), F.chat.type == ChatType.PRIVATE)
+    async def on_purge_errors(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        args = (message.text or "").split(maxsplit=1)
+        if len(args) < 2 or args[1].strip() != WIPE_CONFIRM:
+            await message.answer(
+                "⚠️ Удалит из БД все заявки со статусом «Ошибка» и их папки "
+                "вложений, затем пересоберёт реестр Sheets.\n"
+                f"Для подтверждения: /purge_errors {WIPE_CONFIRM}"
+            )
+            return
+        await message.answer("⏳ Удаляю ошибки и синхронизирую Sheets…")
+        try:
+            detail = await jobs.purge_errors()
+        except Exception as exc:  # noqa: BLE001
+            await message.answer(f"❌ Ошибка purge: {exc}")
             return
         await message.answer(detail)
 

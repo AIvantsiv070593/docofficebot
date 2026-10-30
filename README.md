@@ -1,10 +1,12 @@
 # DocOfficeBot
 
-Прод-бот для чата ОФИС_Документы: альбом накладных (JPEG/PNG/HEIC) + команда `/send` → письмо в DocsInBox, реестр в Google Sheets, статусы реакциями в Telegram.
+Прод-бот для чата ОФИС_Документы: альбом накладных (JPEG/PNG/HEIC/PDF) + команда `/send` → письмо в DocsInBox, реестр в Google Sheets, статусы реакциями в Telegram.
+
+**Версия:** 1.1.0 · [Changelog](CHANGELOG.md)
 
 ## Стек
 
-Python 3.9+ (Docker: 3.12) · aiogram 3 · SQLite · Gmail API · Google Sheets API · Docker Compose
+Python 3.9+ (Docker: 3.12) · aiogram 3 · SQLite · Gmail API · Google Sheets API · Docker Compose · PyMuPDF (PDF)
 
 ## Быстрый старт
 
@@ -41,28 +43,43 @@ Service account **не нужен**. Один вход под `theofficesakh@gma
 | Исключение | 🙈, письмо не шлём |
 | Ответ «обращение №» | 🤝, номер в Sheets |
 | Ответ «обработана» | 👍, СП/ссылки, удаление `data/claims/{id}/` |
+| Ответ про алкоголь / ЕГАИС | 🍺 «Алкоголь», файлы чистим (`/alcohol ID` — вручную для старых) |
 | 48ч без 🤝 | повтор письма (до 3 попыток), затем 😐 |
-| Ошибки | 👎 в чате + DM админу с деталями |
+| Ошибки | 👎 в чате + DM админу; `/retry` / `/purge_errors` |
 
 Реакции бота только из списка Telegram API (`❌📤✅` и т.п. отклоняются).  
 Тема письма: `ООО Сфофрендз инн 6501291591\ {подпись}`.
 
-Типы файлов: только JPEG/PNG/HEIC. PDF и прочее → 👎.
+Типы файлов: JPEG/PNG/HEIC/PDF. Прочее → 👎.  
+Крупные вложения жмутся до лимита письма (картинки → JPEG; PDF → сжатие / страницы в JPEG).
 
 ## Админ (ЛС боту)
 
 ```
 /help
 /pending
+/excluded
+/alcohol 12
+/retry 12
+/retry_errors
+/exceptions
+/exception_add ООО Ромашка
+/exception_del 2
 /check_gmail
 /check_sheets
 /resync_sheets
+/purge_errors CONFIRM
 /wipe_all CONFIRM
 ```
 
-`/help` — список команд. `/pending` — свод заявок не в статусе «Внесено».  
+`/help` — список команд. `/pending` — заявки в работе/ошибки (без «Внесено» и «Исключение»).  
+`/excluded` — заявки со статусом «Исключение».  
+`/alcohol ID` — вручную закрыть заявку как алкоголь (старые ответы ЕГАИС).  
+`/retry` / `/retry_errors` — переотправка заявок со статусом «Ошибка» (нужны файлы в `data/claims/{id}`).  
+`/exceptions` / `exception_add` / `exception_del` — справочник контрагентов в листе Sheets «Исключения».  
 `/check_*` — проверка OAuth + API.  
 `/resync_sheets` — пересобрать лист реестра из SQLite.  
+`/purge_errors CONFIRM` — удалить все «Ошибка» из БД + папки, затем resync Sheets.  
 `/wipe_all CONFIRM` — полная очистка заявок в БД, папок вложений и реестра Sheets (лист «Исключения» не трогает).
 
 ## Права бота в группе
@@ -93,7 +110,9 @@ pytest -q
 
 ## Документация
 
-- [docs/email-examples/](docs/email-examples/)
-- [docs/registry-and-storage.md](docs/registry-and-storage.md)
-- Публичные страницы (GitHub Pages): [homepage](https://aivantsiv070593.github.io/docofficebot/) · [privacy](https://aivantsiv070593.github.io/docofficebot/privacy.html) — см. [docs/GOOGLE-SITE.md](docs/GOOGLE-SITE.md)
-- [Privacy policy (link for Google)](PRIVACY.md) · License: [MIT](LICENSE)
+- [CHANGELOG.md](CHANGELOG.md) — история изменений
+- [docs/deploy-server.md](docs/deploy-server.md) — деплой на VPS (архив без `data/` БД)
+- [docs/email-examples/](docs/email-examples/) — образцы писем DocsInBox
+- [docs/registry-and-storage.md](docs/registry-and-storage.md) — БД vs Sheets
+- GitHub Pages: [homepage](https://aivantsiv070593.github.io/docofficebot/) · [privacy](https://aivantsiv070593.github.io/docofficebot/privacy.html) — [docs/GOOGLE-SITE.md](docs/GOOGLE-SITE.md)
+- [PRIVACY.md](PRIVACY.md) · [LICENSE](LICENSE) (MIT)

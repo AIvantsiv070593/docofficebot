@@ -178,7 +178,7 @@ class GmailPoller:
                         chat_id = claim.chat_id
                         message_id = claim.message_id
                         matched_kind = IncomingKind.APPEAL
-            elif parsed.kind == IncomingKind.ENTERED:
+            elif parsed.kind in (IncomingKind.ENTERED, IncomingKind.ALCOHOL):
                 match = await match_entered_email(
                     session,
                     parsed=parsed,
@@ -188,6 +188,11 @@ class GmailPoller:
                     references=references,
                 )
                 if not match.claim:
+                    label = (
+                        "alcohol"
+                        if parsed.kind == IncomingKind.ALCOHOL
+                        else "entered"
+                    )
                     await repo.add_unmatched(
                         session,
                         gmail_id=gmail_id,
@@ -199,12 +204,25 @@ class GmailPoller:
                     pending_alert = (
                         f"unmatched:{gmail_id}",
                         (
-                            f"Unmatched DocsInBox entered\n"
+                            f"Unmatched DocsInBox {label}\n"
                             f"gmail_id={gmail_id}\nfrom={from_addr}\n"
                             f"subject={subject}\nreason={match.reason}\n"
                             f"snippet={snippet}"
                         ),
                     )
+                elif parsed.kind == IncomingKind.ALCOHOL:
+                    claim = match.claim
+                    await repo.update_claim_fields(
+                        session,
+                        claim,
+                        status=ClaimStatus.ALCOHOL.value,
+                        error_text=None,
+                    )
+                    attachments_dir = claim.attachments_dir
+                    claim_id = claim.id
+                    chat_id = claim.chat_id
+                    message_id = claim.message_id
+                    matched_kind = IncomingKind.ALCOHOL
                 else:
                     claim = match.claim
                     # Ссылку пишем только если в заявке её ещё не было.
@@ -245,6 +263,14 @@ class GmailPoller:
                 chat_id=chat_id,
                 message_id=message_id,
                 status=ClaimStatus.ENTERED,
+            )
+            cleanup_claim_files(attachments_dir)
+        elif matched_kind == IncomingKind.ALCOHOL:
+            await set_status_reaction(
+                self._bot,
+                chat_id=chat_id,
+                message_id=message_id,
+                status=ClaimStatus.ALCOHOL,
             )
             cleanup_claim_files(attachments_dir)
 

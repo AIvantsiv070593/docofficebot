@@ -15,6 +15,12 @@ ENTERED_MARKERS = (
     "документ уже есть в системе",
     "ранее был выгружен в систему",
 )
+ALCOHOL_MARKERS = (
+    "алкогольных накладных",
+    "ручной ввод не подходит для алкогольных",
+    "отчётность по алкоголю",
+    "отчетность по алкоголю",
+)
 DOC_LINE_RE = re.compile(
     r"Накладная\s*№\s*([^\s]+)\s*от\s*(\d{2}\.\d{2}\.\d{4}).*?"
     r"\((https://dxbx\.ru/[^)\s]+)\)",
@@ -34,6 +40,7 @@ DXBX_ID_RE = re.compile(r"/invoice/(\d+)", re.IGNORECASE)
 class IncomingKind(str, Enum):
     APPEAL = "appeal"
     ENTERED = "entered"
+    ALCOHOL = "alcohol"
     UNKNOWN = "unknown"
 
 
@@ -62,6 +69,9 @@ def parse_incoming_email(*, subject: str, body: str) -> ParsedIncoming:
             kind=IncomingKind.APPEAL,
             appeal_number=appeal_match.group(1),
         )
+
+    if any(marker in lowered for marker in ALCOHOL_MARKERS):
+        return ParsedIncoming(kind=IncomingKind.ALCOHOL)
 
     if any(marker in lowered for marker in ENTERED_MARKERS):
         documents = _extract_documents(text)

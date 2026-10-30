@@ -84,6 +84,8 @@ async def run() -> None:
         pipeline=pipeline,
         gmail_auth=gmail_auth,
         jobs=jobs,
+        sheets=sheets,
+        exceptions_cache=exceptions_cache,
     )
     dp.include_router(router)
 

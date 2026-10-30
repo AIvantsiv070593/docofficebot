@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
 import time
+
+# Quotes / dashes / odd punct so «ООО "Гильдия"» matches «ООО Гильдия»
+_PUNCT_RE = re.compile(r'["«»„“”\'`´‘’\-–—.,;:!?()\[\]{}]+')
 
 
 def normalize_counterparty(value: str) -> str:
-    return " ".join((value or "").casefold().split())
+    text = _PUNCT_RE.sub(" ", value or "")
+    return " ".join(text.casefold().split())
 
 
 def is_exception(caption: str, exceptions: list[str]) -> bool:
@@ -32,3 +37,6 @@ class ExceptionsCache:
     def set(self, items: list[str]) -> None:
         self._items = list(items)
         self._loaded_at = time.monotonic()
+
+    def invalidate(self) -> None:
+        self._loaded_at = 0.0

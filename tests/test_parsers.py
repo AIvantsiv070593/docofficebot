@@ -49,3 +49,14 @@ def test_parse_already_in_system_email():
     assert parsed.documents[0].date == "12.10.2026"
     assert parsed.documents[0].dxbx_id == "79448310"
     assert "79448310" in parsed.documents[0].url
+
+
+def test_parse_alcohol_invoice_email():
+    body = _body_from_md("04-alcohol-invoice.md")
+    parsed = parse_incoming_email(
+        subject="ООО Сфофрендз инн 6501291591\\ ООО Гильдия Алко №1",
+        body=body,
+    )
+    assert parsed.kind == IncomingKind.ALCOHOL
+    assert parsed.appeal_number is None
+    assert parsed.documents == []

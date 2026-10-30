@@ -1,7 +1,7 @@
 from src.statuses import STATUS_REACTION, ClaimStatus
 
 # Subset of Telegram Bot API ReactionTypeEmoji — must stay in that list.
-_ALLOWED = frozenset("👀🙈⚡🤝👍😐👎")
+_ALLOWED = frozenset("👀🙈⚡🤝👍😐👎🍺")
 
 
 def test_status_reactions_are_telegram_bot_allowed():

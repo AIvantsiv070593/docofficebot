@@ -70,7 +70,7 @@ async def match_entered_email(
     in_reply_to: str | None,
     references: str | None,
 ) -> MatchResult:
-    if parsed.kind != IncomingKind.ENTERED:
+    if parsed.kind not in (IncomingKind.ENTERED, IncomingKind.ALCOHOL):
         return MatchResult(None, "not_entered")
 
     if parsed.appeal_number:

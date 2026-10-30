@@ -20,7 +20,7 @@ from src.services.caption import (
     clean_claim_caption,
     extract_caption,
 )
-from src.services.compress import compress_images_to_limit, total_size
+from src.services.compress import compress_attachments_to_limit, total_size
 from src.services.download import download_media_items
 from src.services.exceptions_service import ExceptionsCache, is_exception
 from src.services.gmail_auth import GmailAuthError
@@ -69,25 +69,65 @@ class ClaimPipeline:
         )
 
         async with session_scope() as session:
-            existing = await repo.find_active_by_dedupe(
-                session, batch.chat_id, dedupe_key
-            )
-            if existing:
+            existing = await repo.find_by_dedupe(session, batch.chat_id, dedupe_key)
+            if existing and existing.status in {
+                ClaimStatus.ACCEPTED.value,
+                ClaimStatus.SENT.value,
+                ClaimStatus.RECEIVED.value,
+            }:
                 logger.info("duplicate album skipped", extra={"claim_id": existing.id})
                 return
+            if existing and existing.status != ClaimStatus.ERROR.value:
+                # ENTERED / EXCEPTION / NO_REPLY — не переоткрываем
+                logger.info(
+                    "final claim skipped retry",
+                    extra={"claim_id": existing.id, "status": existing.status},
+                )
+                return
 
-            claim = await repo.create_claim(
-                session,
-                chat_id=batch.chat_id,
-                message_id=anchor.message_id,
-                media_group_id=batch.media_group_id,
-                dedupe_key=dedupe_key,
-                caption=caption_clean,
-                outgoing_subject=subject,
-                file_count=len(batch.media),
-                status=ClaimStatus.ACCEPTED,
-            )
-            claim_id = claim.id
+            retry_from = None
+            if existing and existing.status == ClaimStatus.ERROR.value:
+                retry_from = existing
+            elif existing is None:
+                # New Telegram message, same invoice text as an ERROR → fix old row
+                retry_from = await repo.find_error_by_outgoing_subject(
+                    session, batch.chat_id, subject
+                )
+
+            if retry_from is not None:
+                claim = await repo.update_claim_fields(
+                    session,
+                    retry_from,
+                    message_id=anchor.message_id,
+                    media_group_id=batch.media_group_id,
+                    dedupe_key=dedupe_key,
+                    caption=caption_clean,
+                    outgoing_subject=subject,
+                    file_count=len(batch.media),
+                    status=ClaimStatus.ACCEPTED.value,
+                    error_text=None,
+                    attachments_dir=None,
+                    attachments_compressed=False,
+                    gmail_message_id=None,
+                    gmail_thread_id=None,
+                    gmail_rfc_message_id=None,
+                    resend_count=0,
+                    last_sent_at=None,
+                )
+                claim_id = claim.id
+            else:
+                claim = await repo.create_claim(
+                    session,
+                    chat_id=batch.chat_id,
+                    message_id=anchor.message_id,
+                    media_group_id=batch.media_group_id,
+                    dedupe_key=dedupe_key,
+                    caption=caption_clean,
+                    outgoing_subject=subject,
+                    file_count=len(batch.media),
+                    status=ClaimStatus.ACCEPTED,
+                )
+                claim_id = claim.id
 
         await set_status_reaction(
             self._bot,
@@ -117,15 +157,6 @@ class ClaimPipeline:
             )
             return
 
-        if not self._gmail_auth_ok():
-            await self._fail(
-                claim_id,
-                batch,
-                error="Gmail auth",
-                stage="gmail_auth",
-            )
-            return
-
         exceptions = await self._load_exceptions()
         if is_exception(caption_clean, exceptions):
             async with session_scope() as session:
@@ -143,7 +174,10 @@ class ClaimPipeline:
             await self._sync_sheet(claim_id)
             return
 
+        # Download before Gmail check so ERROR leaves files for /retry
         claim_dir = self._settings.claims_dir / str(claim_id)
+        if claim_dir.exists():
+            shutil.rmtree(claim_dir, ignore_errors=True)
         try:
             paths = await download_media_items(self._bot, batch.media, claim_dir)
         except Exception as exc:  # noqa: BLE001
@@ -157,7 +191,7 @@ class ClaimPipeline:
             return
 
         try:
-            send_paths, compressed = compress_images_to_limit(
+            send_paths, compressed = compress_attachments_to_limit(
                 paths, self._settings.max_attachment_bytes
             )
             if total_size(send_paths) > self._settings.max_attachment_bytes:
@@ -187,6 +221,15 @@ class ClaimPipeline:
                     attachments_dir=str(claim_dir),
                     attachments_compressed=compressed,
                 )
+
+        if not self._gmail_auth_ok():
+            await self._fail(
+                claim_id,
+                batch,
+                error="Gmail auth",
+                stage="gmail_auth",
+            )
+            return
 
         try:
             gmail_id, thread_id, rfc_id = self._gmail_sender.send(

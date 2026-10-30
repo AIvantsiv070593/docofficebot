@@ -15,9 +15,18 @@ from src.services.claim_pipeline import cleanup_claim_files
 from src.services.gmail_auth import GmailAuthError
 from src.services.gmail_sender import GmailSender
 from src.services.sheets import SheetsRegistry
-from src.statuses import ClaimStatus, FINAL_STATUSES
+from src.statuses import ClaimStatus
 
 logger = logging.getLogger(__name__)
+
+
+def pick_send_paths(attachments_dir: str | Path) -> list[Path]:
+    files = [p for p in sorted(Path(attachments_dir).glob("*")) if p.is_file()]
+    double = [p for p in files if p.stem.endswith("_c_c")]
+    single = [
+        p for p in files if p.stem.endswith("_c") and not p.stem.endswith("_c_c")
+    ]
+    return double or single or files
 
 
 class BackgroundJobs:
@@ -90,9 +99,15 @@ class BackgroundJobs:
             )
             return
 
-        paths = sorted(Path(attachments_dir).glob("*"))
-        compressed = [p for p in paths if p.is_file() and p.name.endswith("_c.jpg")]
-        send_paths = compressed or [p for p in paths if p.is_file()]
+        send_paths = pick_send_paths(attachments_dir)
+        if not send_paths:
+            await self._mark_no_reply(
+                claim_id,
+                chat_id,
+                message_id,
+                reason="нет файлов для повтора",
+            )
+            return
 
         try:
             gmail_id, thread_id, rfc_id = self._gmail_sender.send(
@@ -128,6 +143,144 @@ class BackgroundJobs:
                 last_sent_at=datetime.now(timezone.utc),
                 resend_count=resend_count + 1,
             )
+
+    async def retry_error_claim(self, claim_id: int) -> str:
+        """Re-send an ERROR claim from saved attachments (after Gmail auth fix)."""
+        async with session_scope() as session:
+            claim = await repo.get_claim_by_id(session, claim_id)
+            if not claim:
+                return f"❌ #{claim_id}: не найдена"
+            if claim.status != ClaimStatus.ERROR.value:
+                return f"❌ #{claim_id}: статус «{claim.status}», нужен «Ошибка»"
+            attachments_dir = claim.attachments_dir
+            subject = claim.outgoing_subject
+            chat_id = claim.chat_id
+            message_id = claim.message_id
+            caption = (claim.caption or "").strip() or "—"
+
+        if not attachments_dir or not Path(attachments_dir).exists():
+            return (
+                f"❌ #{claim_id}: нет файлов на диске.\n"
+                f"📎 {caption}\n"
+                "Сделай реплай /send на исходное сообщение в чате."
+            )
+        send_paths = pick_send_paths(attachments_dir)
+        if not send_paths:
+            return (
+                f"❌ #{claim_id}: папка вложений пуста.\n"
+                "Сделай реплай /send на исходное сообщение в чате."
+            )
+
+        try:
+            gmail_id, thread_id, rfc_id = self._gmail_sender.send(
+                to=self._settings.invoice_to_email,
+                subject=subject,
+                body=self._settings.mail_body,
+                attachments=send_paths,
+            )
+        except GmailAuthError as exc:
+            return f"❌ #{claim_id}: Gmail auth — {exc}"
+        except Exception as exc:  # noqa: BLE001
+            return f"❌ #{claim_id}: отправка не удалась — {exc}"
+
+        now = datetime.now(timezone.utc)
+        async with session_scope() as session:
+            claim = await repo.get_claim_by_id(session, claim_id)
+            if not claim:
+                return f"❌ #{claim_id}: исчезла после отправки"
+            await repo.update_claim_fields(
+                session,
+                claim,
+                status=ClaimStatus.SENT.value,
+                error_text=None,
+                gmail_message_id=gmail_id,
+                gmail_thread_id=thread_id,
+                gmail_rfc_message_id=rfc_id,
+                last_sent_at=now,
+                resend_count=max(claim.resend_count, 1),
+            )
+
+        await set_status_reaction(
+            self._bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            status=ClaimStatus.SENT,
+        )
+        try:
+            async with session_scope() as session:
+                claim = await repo.get_claim_by_id(session, claim_id)
+                if claim:
+                    row = self._sheets.upsert_claim_row(claim)
+                    await repo.mark_sheet_synced(
+                        session, claim_id, row or claim.sheet_row or 0
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sheets sync after retry failed claim=%s: %s", claim_id, exc)
+
+        return f"✅ #{claim_id} переотправлено → ⚡\n📎 {caption}"
+
+    async def retry_all_errors(self) -> str:
+        async with session_scope() as session:
+            claims = await repo.list_error_claims(session)
+            ids = [c.id for c in claims]
+        if not ids:
+            return "ℹ️ Заявок в статусе «Ошибка» нет."
+        lines = [f"🔁 Retry ошибок: {len(ids)}"]
+        for claim_id in ids:
+            lines.append(await self.retry_error_claim(claim_id))
+        return "\n\n".join(lines)
+
+    async def mark_alcohol(self, claim_id: int) -> str:
+        """Manually close a claim as alcohol (EGAIS) — for old unmatched replies."""
+        allowed = {
+            ClaimStatus.ACCEPTED.value,
+            ClaimStatus.SENT.value,
+            ClaimStatus.RECEIVED.value,
+            ClaimStatus.ERROR.value,
+            ClaimStatus.NO_REPLY.value,
+        }
+        async with session_scope() as session:
+            claim = await repo.get_claim_by_id(session, claim_id)
+            if not claim:
+                return f"❌ #{claim_id}: не найдена"
+            if claim.status == ClaimStatus.ALCOHOL.value:
+                return f"ℹ️ #{claim_id}: уже «Алкоголь»"
+            if claim.status not in allowed:
+                return (
+                    f"❌ #{claim_id}: статус «{claim.status}», "
+                    "можно только из работы/ошибки"
+                )
+            attachments_dir = claim.attachments_dir
+            chat_id = claim.chat_id
+            message_id = claim.message_id
+            caption = (claim.caption or "").strip() or "—"
+            await repo.update_claim_fields(
+                session,
+                claim,
+                status=ClaimStatus.ALCOHOL.value,
+                error_text=None,
+            )
+
+        await set_status_reaction(
+            self._bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            status=ClaimStatus.ALCOHOL,
+        )
+        cleanup_claim_files(attachments_dir)
+        try:
+            async with session_scope() as session:
+                claim = await repo.get_claim_by_id(session, claim_id)
+                if claim:
+                    row = self._sheets.upsert_claim_row(claim)
+                    await repo.mark_sheet_synced(
+                        session, claim_id, row or claim.sheet_row or 0
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "sheets sync after alcohol mark failed claim=%s: %s", claim_id, exc
+            )
+        return f"🍺 #{claim_id} → Алкоголь\n📎 {caption}"
 
     async def _mark_no_reply(
         self,
@@ -228,7 +381,31 @@ class BackgroundJobs:
             f"❓ unmatched={counts['unmatched_emails']}"
         )
 
+    async def purge_errors(self) -> str:
+        """Delete all ERROR claims + their attachment folders, then rebuild Sheets."""
+        async with session_scope() as session:
+            ids = await repo.delete_error_claims(session)
+        for claim_id in ids:
+            cleanup_claim_files(str(self._settings.claims_dir / str(claim_id)))
+        if not ids:
+            return "ℹ️ Заявок со статусом «Ошибка» не было."
+        ids_preview = ", ".join(f"#{i}" for i in ids[:20])
+        if len(ids) > 20:
+            ids_preview += f" … (+{len(ids) - 20})"
+        resync = await self.resync_sheets()
+        return (
+            f"✅ Удалено ошибок: {len(ids)} ({ids_preview})\n"
+            f"{resync}"
+        )
+
     async def cleanup_orphan_claims(self) -> None:
+        # Keep ERROR folders — /retry needs them. Drop only terminal done/no-retry.
+        purge = {
+            ClaimStatus.EXCEPTION.value,
+            ClaimStatus.ENTERED.value,
+            ClaimStatus.ALCOHOL.value,
+            ClaimStatus.NO_REPLY.value,
+        }
         claims_root = self._settings.claims_dir
         if not claims_root.exists():
             return
@@ -238,7 +415,7 @@ class BackgroundJobs:
                     continue
                 claim_id = int(path.name)
                 claim = await repo.get_claim_by_id(session, claim_id)
-                if claim is None or claim.status in {s.value for s in FINAL_STATUSES}:
+                if claim is None or claim.status in purge:
                     shutil.rmtree(path, ignore_errors=True)
 
     async def health_check(self) -> None:
